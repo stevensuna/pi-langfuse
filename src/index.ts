@@ -705,6 +705,7 @@ export default async function (pi: ExtensionAPI) {
 				traceId: promptState.trace.id,
 				parentObservationId: turnState.span?.id || promptState.promptSpan?.id,
 				input: generationInput,
+				model: currentModel || undefined,
 				metadata: {
 					turnIndex: turnState.index,
 					model: currentModel,
@@ -806,6 +807,7 @@ export default async function (pi: ExtensionAPI) {
 				usage: standardUsage,
 				usageDetails,
 				costDetails,
+				model: message.model || currentModel || undefined,
 				metadata: {
 					model: message.model || currentModel,
 					provider: currentProvider,

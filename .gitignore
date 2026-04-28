@@ -5,3 +5,4 @@ config.json
 /.pi-lens
 dist/
 .npmrc
+.pi/

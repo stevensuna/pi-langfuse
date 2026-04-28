@@ -25,6 +25,7 @@ type ObservationEndBody = {
 	usage?: unknown;
 	usageDetails?: Record<string, number>;
 	costDetails?: Record<string, number>;
+	model?: string;
 	statusMessage?: string;
 };
 
@@ -52,6 +53,7 @@ export interface LangfuseGeneration {
 		usageDetails?: Record<string, number>;
 		output?: unknown;
 		costDetails?: Record<string, number>;
+		model?: string;
 		statusMessage?: string;
 	}): void;
 	end(body?: ObservationEndBody): void;
