@@ -253,6 +253,12 @@ Raw trace:
   ~/.pi/agent/langfuse/raw-traces/--project--/<session>.jsonl
 ```
 
+If a nonstandard session path has no project directory to mirror, the raw trace is kept under the reserved fallback namespace instead of the raw-traces root:
+
+```text
+~/.pi/agent/langfuse/raw-traces/--unknown--/<session>.jsonl
+```
+
 Each file contains records such as:
 
 - `session_start`

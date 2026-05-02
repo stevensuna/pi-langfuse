@@ -16,6 +16,19 @@ describe("raw trace writer", () => {
 		);
 	});
 
+	it("stores sessions without a project directory under the unknown namespace", () => {
+		expect(
+			rawTracePathForSession(
+				"/tmp/pi-agent/sessions/session.jsonl",
+				"/raw-root",
+			),
+		).toBe("/raw-root/--unknown--/session.jsonl");
+
+		expect(rawTracePathForSession("/tmp/session.jsonl", "/raw-root")).toBe(
+			"/raw-root/--unknown--/session.jsonl",
+		);
+	});
+
 	it("appends lossless JSONL records when enabled", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-langfuse-raw-trace-test-"));
 		const sessionFile =
@@ -51,6 +64,20 @@ describe("raw trace writer", () => {
 
 		expect(rawTracePathForSession(sessionFile, dir)).toBe(
 			join(dir, "--work--", "session.jsonl"),
+		);
+	});
+
+	it("keeps disabled fallback paths under the unknown namespace", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-langfuse-raw-trace-test-"));
+		const sessionFile = "/tmp/pi-agent/sessions/session.jsonl";
+
+		appendRawTrace({ rawTraceEnabled: false, rawTraceDir: dir }, sessionFile, {
+			type: "provider_request",
+			timestamp: "2026-05-01T00:00:00.000Z",
+		});
+
+		expect(rawTracePathForSession(sessionFile, dir)).toBe(
+			join(dir, "--unknown--", "session.jsonl"),
 		);
 	});
 });

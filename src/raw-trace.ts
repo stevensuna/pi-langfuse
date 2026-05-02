@@ -32,8 +32,15 @@ export function rawTracePathForSession(
 	if (!sessionFile) return undefined;
 	const marker = "/sessions/";
 	const index = sessionFile.indexOf(marker);
-	if (index === -1) return join(rawTraceDir, basename(sessionFile));
-	return join(rawTraceDir, sessionFile.slice(index + marker.length));
+	if (index === -1)
+		return join(rawTraceDir, "--unknown--", basename(sessionFile));
+	const relativePath = sessionFile.slice(index + marker.length);
+	return join(
+		rawTraceDir,
+		relativePath.includes("/")
+			? relativePath
+			: join("--unknown--", relativePath),
+	);
 }
 
 function jsonReplacer(_key: string, value: unknown) {
