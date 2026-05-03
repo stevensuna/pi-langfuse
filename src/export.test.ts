@@ -170,4 +170,83 @@ describe("redacted export", () => {
 			delete process.env.TRUFFLEHOG_BIN;
 		}
 	});
+
+	it("strips absolute source path prefixes from exported content", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-langfuse-path-test-"));
+		const sessions = join(root, "sessions", "--project--");
+		const raw = join(root, "raw", "--project--");
+		const out = join(root, "export");
+		mkdirSync(sessions, { recursive: true });
+		mkdirSync(raw, { recursive: true });
+
+		const sessionContent = JSON.stringify({
+			type: "session",
+			cwd: `${root}/my-project`,
+		});
+		const rawContent = JSON.stringify({
+			type: "tool_execution_start",
+			sessionFile: `${root}/sessions/--project--/s.jsonl`,
+			args: { command: `cd ${root}/my-project && npm test` },
+		});
+
+		writeFileSync(join(sessions, "session.jsonl"), `${sessionContent}\n`);
+		writeFileSync(join(raw, "trace.jsonl"), `${rawContent}\n`);
+
+		exportRedactedData(
+			baseConfig,
+			`--sessions-dir ${join(root, "sessions")} --raw-dir ${join(root, "raw")} --out ${out} --no-trufflehog`,
+		);
+
+		const exportedSession = readFileSync(
+			join(out, "sessions", "--project--", "session.jsonl"),
+			"utf-8",
+		);
+		const exportedRaw = readFileSync(
+			join(out, "raw-traces", "--project--", "trace.jsonl"),
+			"utf-8",
+		);
+
+		// Absolute paths should be replaced with [PATH_ROOT]
+		const combined = `${exportedSession}\n${exportedRaw}`;
+		expect(combined).not.toContain(root);
+		expect(combined).toContain("[PATH_ROOT]");
+		expect(combined).toContain("[PATH_ROOT]/my-project");
+		expect(combined).toContain("cd [PATH_ROOT]/my-project && npm test");
+
+		// report.json should not contain the absolute path either
+		const reportText = readFileSync(join(out, "report.json"), "utf-8");
+		expect(reportText).not.toContain(root);
+	});
+
+	it("always redacts in export regardless of redactionEnabled config", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-langforce-unred-test-"));
+		const sessions = join(root, "sessions", "--test--");
+		const out = join(root, "export");
+		mkdirSync(sessions, { recursive: true });
+
+		writeFileSync(
+			join(sessions, "session.jsonl"),
+			`${JSON.stringify({ secret: "sk-lf-test-secret-1234567890 Bearer abcdefghijklmnopqrstuvwxyz1234567890" })}\n`,
+		);
+
+		const unredactedConfig: Config = {
+			...baseConfig,
+			redactionEnabled: false,
+		};
+
+		exportRedactedData(
+			unredactedConfig,
+			`--sessions-only --sessions-dir ${join(root, "sessions")} --out ${out} --no-trufflehog`,
+		);
+
+		const exported = readFileSync(
+			join(out, "sessions", "--test--", "session.jsonl"),
+			"utf-8",
+		);
+		expect(exported).not.toContain("sk-lf-test-secret-1234567890");
+		expect(exported).not.toContain(
+			"Bearer abcdefghijklmnopqrstuvwxyz1234567890",
+		);
+		expect(exported).toContain("[REDACTED:");
+	});
 });

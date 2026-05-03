@@ -50,6 +50,23 @@ const SECRET_PATTERNS: Array<{ reason: string; pattern: RegExp }> = [
 		pattern: /\bsk-lf-[A-Za-z0-9_-]{10,}\b/g,
 	},
 	{
+		reason: "stripe-key",
+		pattern: /\b(?:sk|pk)_(?:test|live|prod)_[A-Za-z0-9]{20,}\b/g,
+	},
+	{
+		reason: "sendgrid-key",
+		pattern: /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b/g,
+	},
+	{
+		reason: "docker-pat",
+		pattern: /\bdckr_pat_[A-Za-z0-9_-]{20,}\b/g,
+	},
+	{
+		reason: "slack-webhook-url",
+		pattern:
+			/\bhttps:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+\b/g,
+	},
+	{
 		reason: "openai-key",
 		pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
 	},
@@ -215,20 +232,22 @@ export function redactString(
 				: match,
 	);
 
-	for (const secret of collectExactSecrets(config, env)) {
-		if (output.includes(secret.value)) {
-			output = output
-				.split(secret.value)
-				.join(placeholder(secret.reason, secret.value));
-		}
-	}
-
+	// Regex patterns run before exact secrets so longer pattern matches
+	// are not fragmented by shorter exact-secret replacements.
 	for (const { reason, pattern } of SECRET_PATTERNS) {
 		output = output.replace(pattern, (match) =>
 			reason.endsWith("blob") || reason === "data-url"
 				? blobPlaceholder(reason, match)
 				: placeholder(reason, match),
 		);
+	}
+
+	for (const secret of collectExactSecrets(config, env)) {
+		if (output.includes(secret.value)) {
+			output = output
+				.split(secret.value)
+				.join(placeholder(secret.reason, secret.value));
+		}
 	}
 
 	for (const { reason, pattern, validate } of PII_PATTERNS) {

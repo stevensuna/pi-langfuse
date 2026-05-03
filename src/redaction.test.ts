@@ -29,7 +29,7 @@ describe("redaction", () => {
 		expect(output).not.toContain("sk-proj-thisisaverylongopenaitestkey");
 		expect(output).not.toContain("manually-configured-secret");
 		expect(output).toContain("[REDACTED:langfuse-secret-key:");
-		expect(output).toContain("[REDACTED:openai-api-key:");
+		expect(output).toContain("[REDACTED:openai-key:");
 		expect(output).toContain("[REDACTED:configured-secret:");
 	});
 
@@ -45,6 +45,30 @@ describe("redaction", () => {
 		expect(output).toContain("[REDACTED:bearer-token:");
 		expect(output).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz1234567890");
 		expect(output).not.toContain("hf_abcdefghijklmnopqrstuvwxyz");
+	});
+
+	it("redacts Stripe, SendGrid, Docker PAT, and Slack webhook patterns", () => {
+		const output = redactString(
+			config,
+			[
+				"sk_live_abcdefghijklmnop1234",
+				"pk_test_abcdefghijklmnop12345678",
+				"SG.abcdefghijklmnop1234567890.qwertyuiop1234567890asdfghjk",
+				"dckr_pat_abcdefghijklmnop-1234567890abcdefGH",
+				"https://hooks.slack.com/services/T00ABCDEF/B00ABCDEF/abcdefghijklmnop1234567890",
+			].join(" "),
+			{},
+		);
+
+		expect(output).toContain("[REDACTED:stripe-key:");
+		expect(output).toContain("[REDACTED:sendgrid-key:");
+		expect(output).toContain("[REDACTED:docker-pat:");
+		expect(output).toContain("[REDACTED:slack-webhook-url:");
+		expect(output).not.toContain("sk_live_");
+		expect(output).not.toContain("pk_test_");
+		expect(output).not.toContain("SG.");
+		expect(output).not.toContain("dckr_pat_");
+		expect(output).not.toContain("hooks.slack.com");
 	});
 
 	it("redacts .env-style secret assignments while preserving useful shape", () => {

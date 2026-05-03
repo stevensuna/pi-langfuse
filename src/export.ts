@@ -160,15 +160,30 @@ function sanitizeJsonl(config: Config, content: string) {
 	return sanitizedLines.join("\n");
 }
 
+function stripAbsolutePathPrefix(content: string, prefixes: string[]): string {
+	if (!prefixes.length) return content;
+	let output = content;
+	for (const prefix of prefixes) {
+		if (!prefix) continue;
+		const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		output = output.replace(new RegExp(escaped, "g"), "[PATH_ROOT]");
+	}
+	return output;
+}
+
 function copyRedactedFile(
 	config: Config,
 	layer: ExportFileResult["layer"],
 	sourceRoot: string,
 	source: string,
 	outRoot: string,
+	pathPrefixes: string[] = [],
 ): ExportFileResult {
 	const content = readFileSync(source, "utf-8");
-	const sanitized = sanitizeJsonl(config, content);
+	const sanitized = stripAbsolutePathPrefix(
+		sanitizeJsonl(config, content),
+		pathPrefixes,
+	);
 	const preRedactionFindings = scanForSecrets(config, content);
 	const residualFindings = scanForSecrets(config, sanitized);
 	const relativePath =
@@ -271,7 +286,10 @@ export function exportRedactedData(
 	args = "",
 	ctx?: CommandContext,
 ): ExportReport {
-	const options = parseArgs(args, config);
+	// Export always redacts regardless of live telemetry settings.
+	// PI_LANGFUSE_UNREDACTED disables redaction for live traces only.
+	const exportConfig: Config = { ...config, redactionEnabled: true };
+	const options = parseArgs(args, exportConfig);
 	const outDir = resolve(options.outDir || "");
 	mkdirSync(outDir, { recursive: true });
 	const onProgress = ctx?.onProgress;
@@ -292,6 +310,24 @@ export function exportRedactedData(
 			}))
 		: [];
 	const inputs = [...sessionInputs, ...rawInputs];
+	const pathPrefixes = Array.from(
+		new Set(
+			[
+				...(options.includeSessions
+					? [resolve(options.sessionsDir || "")]
+					: []),
+				...(options.includeRawTraces
+					? [resolve(options.rawTraceDir || "")]
+					: []),
+				options.includeSessions
+					? resolve(options.sessionsDir || "").replace(
+							/[\\/]sessions[\\/]?$/,
+							"",
+						)
+					: "",
+			].filter(Boolean),
+		),
+	);
 	const files: ExportFileResult[] = [];
 	inputs.forEach((input, index) => {
 		onProgress?.({
@@ -303,7 +339,14 @@ export function exportRedactedData(
 			message: `redacting ${index + 1}/${inputs.length}`,
 		});
 		files.push(
-			copyRedactedFile(config, input.layer, input.root, input.file, outDir),
+			copyRedactedFile(
+				exportConfig,
+				input.layer,
+				input.root,
+				input.file,
+				outDir,
+				pathPrefixes,
+			),
 		);
 	});
 
