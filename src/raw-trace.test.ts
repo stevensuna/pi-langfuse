@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
 	appendRawTrace,
 	defaultRawTraceDir,
+	drainRawTraceQueue,
 	rawTracePathForSession,
 } from "./raw-trace.js";
 
@@ -61,6 +62,7 @@ describe("raw trace writer", () => {
 				content: [{ type: "text", text: "important raw output" }],
 			},
 		);
+		drainRawTraceQueue();
 
 		const rawPath = rawTracePathForSession(sessionFile, dir);
 		expect(rawPath).toBeDefined();
@@ -97,6 +99,7 @@ describe("raw trace writer", () => {
 				],
 			},
 		);
+		drainRawTraceQueue();
 
 		const rawPath = rawTracePathForSession(sessionFile, dir);
 		if (!rawPath) throw new Error("raw trace path was not created");

@@ -22,6 +22,51 @@ interface RawTraceBaseRecord {
 
 type RawTraceRecord = RawTraceBaseRecord & Record<string, unknown>;
 
+interface QueuedWrite {
+	path: string;
+	config: RawTraceConfig;
+	record: RawTraceRecord;
+}
+
+const writeQueue: QueuedWrite[] = [];
+let flushScheduled = false;
+
+function scheduleFlush() {
+	if (flushScheduled) return;
+	flushScheduled = true;
+	queueMicrotask(() => {
+		flushScheduled = false;
+		flushQueue();
+	});
+}
+
+function flushQueue() {
+	while (writeQueue.length > 0) {
+		const item = writeQueue.shift();
+		if (!item) break;
+		const { path, config, record } = item;
+		try {
+			const sanitizedRecord = sanitizeForTelemetry(config, record);
+			appendFileSync(
+				path,
+				`${JSON.stringify(sanitizedRecord, jsonReplacer)}\n`,
+				"utf-8",
+			);
+		} catch (error) {
+			console.warn("📊 Langfuse: Failed to write raw trace", error);
+		}
+	}
+}
+
+/**
+ * Flush any pending raw trace writes synchronously.
+ * Call before process exit to avoid losing queued records.
+ */
+export function drainRawTraceQueue() {
+	flushScheduled = false;
+	flushQueue();
+}
+
 export function defaultRawTraceDir() {
 	return join(
 		process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
@@ -62,6 +107,12 @@ function jsonReplacer(_key: string, value: unknown) {
 	return value;
 }
 
+/**
+ * Enqueue a raw trace record for asynchronous writing.
+ * Returns immediately — actual redaction + file I/O happens on the next
+ * microtask, so the Pi event handler is never blocked by regex redaction
+ * or synchronous file writes.
+ */
 export function appendRawTrace(
 	config: RawTraceConfig,
 	sessionFile: string | undefined,
@@ -72,13 +123,9 @@ export function appendRawTrace(
 	if (!path) return;
 	try {
 		mkdirSync(dirname(path), { recursive: true });
-		const sanitizedRecord = sanitizeForTelemetry(config, record);
-		appendFileSync(
-			path,
-			`${JSON.stringify(sanitizedRecord, jsonReplacer)}\n`,
-			"utf-8",
-		);
-	} catch (error) {
-		console.warn("📊 Langfuse: Failed to write raw trace", error);
+	} catch {
+		// Directory creation is best-effort on enqueue; failures surface on flush.
 	}
+	writeQueue.push({ path, config, record });
+	scheduleFlush();
 }

@@ -17,7 +17,7 @@ import {
 } from "./langfuse-client.js";
 import { ensureLocalLangfuseStarted } from "./local-autostart.js";
 import { runLangfuseInit } from "./local-init.js";
-import { appendRawTrace } from "./raw-trace.js";
+import { appendRawTrace, drainRawTraceQueue } from "./raw-trace.js";
 import { redactionMetadata, redactString } from "./redaction.js";
 import {
 	EXTENSION_ID,
@@ -1294,6 +1294,7 @@ export default async function (pi: ExtensionAPI) {
 			reason: "shutdown",
 			runtime: getRuntimeName(),
 		});
+		drainRawTraceQueue();
 		await finalizePrompt(config, true);
 		await shutdownClient();
 	});
