@@ -158,6 +158,43 @@ describe("redaction", () => {
 		expect(findings).not.toContain("phone-number");
 	});
 
+	it("redacts SSE data: lines and non-base64 data URIs that would crash Langfuse SDK", () => {
+		const output = redactString(
+			config,
+			[
+				'data: {"id":"chatcmpl-x","object":"chat.completion.chunk"}',
+				"data: [DONE]",
+			].join("\n"),
+			{},
+		);
+
+		expect(output).toContain("[REDACTED:sse-data-line:");
+		expect(output).not.toContain('data: {"id":"chatcmpl-x"');
+		expect(output).not.toContain("data: [DONE]");
+	});
+
+	it("does not redact proper base64 data URIs or unrelated code with sse-data-line pattern", () => {
+		const output = redactString(
+			config,
+			[
+				// Short base64 (under 40 chars) — caught by neither data-url nor sse-data-line
+				"data:image/png;base64,abc123",
+				// TypeScript property with "data:" keyword (not at start of line)
+				'  path: string;\n\tdata: string;\n\tmimeType: ImageContent["mimeType"];',
+				// NodeJS event code
+				'.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });',
+				// Normal text
+				"safe normal text with no data: prefix",
+			].join("\n"),
+			{},
+		);
+
+		expect(output).toContain("data:image/png;base64,abc123");
+		expect(output).toContain("data: string;");
+		expect(output).toContain('.stdout.on("data", (data: Buffer) =>');
+		expect(output).toContain("safe normal text with no data: prefix");
+	});
+
 	it("can be explicitly disabled for dangerous local debugging", () => {
 		expect(
 			redactString(

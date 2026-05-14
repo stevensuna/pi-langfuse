@@ -87,6 +87,10 @@ const SECRET_PATTERNS: Array<{ reason: string; pattern: RegExp }> = [
 		pattern: /\bdata:[^\s;,]+(?:;[^\s,]+)?,[A-Za-z0-9+/=_-]{40,}/g,
 	},
 	{
+		reason: "sse-data-line",
+		pattern: /\bdata:\s*(\{|\[)/g,
+	},
+	{
 		reason: "long-base64-blob",
 		pattern: /\b(?:[A-Za-z0-9+/]{120,}={0,2}|[A-Za-z0-9_-]{160,})\b/g,
 	},
