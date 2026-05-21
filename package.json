@@ -62,7 +62,7 @@
 	},
 	"peerDependencies": {
 		"@axnic/pi-extension-settings": "^0.2.0",
-		"@mariozechner/pi-coding-agent": "*"
+		"@earendil-works/pi-coding-agent": "*"
 	},
 	"peerDependenciesMeta": {
 		"@axnic/pi-extension-settings": {
