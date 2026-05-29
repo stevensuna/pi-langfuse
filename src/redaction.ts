@@ -88,7 +88,7 @@ const SECRET_PATTERNS: Array<{ reason: string; pattern: RegExp }> = [
 	},
 	{
 		reason: "sse-data-line",
-		pattern: /\bdata:\s*(\{|\[)/g,
+		pattern: /^data:\s*(?:\{|\[).*$/gm,
 	},
 	{
 		reason: "long-base64-blob",

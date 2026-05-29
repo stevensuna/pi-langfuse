@@ -158,19 +158,25 @@ describe("redaction", () => {
 		expect(findings).not.toContain("phone-number");
 	});
 
-	it("redacts SSE data: lines and non-base64 data URIs that would crash Langfuse SDK", () => {
+	it("redacts whole SSE data lines that would be misparsed as Langfuse media", () => {
 		const output = redactString(
 			config,
 			[
+				"event: message_start",
 				'data: {"id":"chatcmpl-x","object":"chat.completion.chunk"}',
 				"data: [DONE]",
+				"event: content_block_delta",
+				'data: {"delta":{"thinking":" I","type":"thinking_delta"},"index":0}',
 			].join("\n"),
 			{},
 		);
 
+		expect(output).toContain("event: message_start");
+		expect(output).toContain("event: content_block_delta");
 		expect(output).toContain("[REDACTED:sse-data-line:");
 		expect(output).not.toContain('data: {"id":"chatcmpl-x"');
 		expect(output).not.toContain("data: [DONE]");
+		expect(output).not.toContain("thinking_delta");
 	});
 
 	it("does not redact proper base64 data URIs or unrelated code with sse-data-line pattern", () => {
