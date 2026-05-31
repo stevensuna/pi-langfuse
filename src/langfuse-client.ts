@@ -111,8 +111,38 @@ interface LangfuseClient {
 let client: LangfuseClient | null = null;
 let clientConfigKey = "";
 
+function isBase64DataUri(value: string): boolean {
+	return /^data:[^,;]+(?:;[^,;]+)*;base64,[A-Za-z0-9+/=_-]+$/i.test(value);
+}
+
+function neutralizeLangfuseMediaPrefix<T>(
+	value: T,
+	seen = new WeakSet<object>(),
+): T {
+	if (typeof value === "string") {
+		return (
+			value.startsWith("data:") && !isBase64DataUri(value)
+				? `data\\:${value.slice("data:".length)}`
+				: value
+		) as T;
+	}
+	if (!value || typeof value !== "object") return value;
+	if (seen.has(value)) return "[Circular]" as T;
+	seen.add(value);
+
+	if (Array.isArray(value)) {
+		return value.map((item) => neutralizeLangfuseMediaPrefix(item, seen)) as T;
+	}
+
+	const output: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+		output[key] = neutralizeLangfuseMediaPrefix(item, seen);
+	}
+	return output as T;
+}
+
 function sanitizeBody<T>(config: Config, body: T): T {
-	return sanitizeForTelemetry(config, body);
+	return neutralizeLangfuseMediaPrefix(sanitizeForTelemetry(config, body));
 }
 
 function wrapTrace(config: Config, trace: LangfuseTrace): LangfuseTrace {

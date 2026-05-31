@@ -158,39 +158,16 @@ describe("redaction", () => {
 		expect(findings).not.toContain("phone-number");
 	});
 
-	it("redacts whole SSE data lines that would be misparsed as Langfuse media", () => {
+	it("does not redact proper base64 data URIs or unrelated data-prefixed text", () => {
 		const output = redactString(
 			config,
 			[
-				"event: message_start",
-				'data: {"id":"chatcmpl-x","object":"chat.completion.chunk"}',
-				"data: [DONE]",
-				"event: content_block_delta",
-				'data: {"delta":{"thinking":" I","type":"thinking_delta"},"index":0}',
-			].join("\n"),
-			{},
-		);
-
-		expect(output).toContain("event: message_start");
-		expect(output).toContain("event: content_block_delta");
-		expect(output).toContain("[REDACTED:sse-data-line:");
-		expect(output).not.toContain('data: {"id":"chatcmpl-x"');
-		expect(output).not.toContain("data: [DONE]");
-		expect(output).not.toContain("thinking_delta");
-	});
-
-	it("does not redact proper base64 data URIs or unrelated code with sse-data-line pattern", () => {
-		const output = redactString(
-			config,
-			[
-				// Short base64 (under 40 chars) — caught by neither data-url nor sse-data-line
 				"data:image/png;base64,abc123",
-				// TypeScript property with "data:" keyword (not at start of line)
 				'  path: string;\n\tdata: string;\n\tmimeType: ImageContent["mimeType"];',
-				// NodeJS event code
 				'.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });',
-				// Normal text
 				"safe normal text with no data: prefix",
+				'data: 0:"Hello! How can I help you today?"',
+				'data: d:{"credits_used":0.0046,"tokens":{"input":60,"output":8,"total":68}}',
 			].join("\n"),
 			{},
 		);
@@ -199,6 +176,8 @@ describe("redaction", () => {
 		expect(output).toContain("data: string;");
 		expect(output).toContain('.stdout.on("data", (data: Buffer) =>');
 		expect(output).toContain("safe normal text with no data: prefix");
+		expect(output).toContain('data: 0:"Hello! How can I help you today?"');
+		expect(output).toContain("credits_used");
 	});
 
 	it("can be explicitly disabled for dangerous local debugging", () => {

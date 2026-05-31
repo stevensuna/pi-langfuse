@@ -74,6 +74,18 @@ describe("langfuse client redaction wrapper", () => {
 			input: [{ role: "user", content: "sk-lf-test-secret-1234567890" }],
 		});
 		generation.end({ output: "hf_abcdefghijklmnopqrstuvwxyz" });
+		span.end({
+			output: [
+				'data: 0:"Hello! How can I help you today?"',
+				'data: d:{"credits_used":0.0046,"tokens":{"input":60,"output":8,"total":68}}',
+			].join("\n"),
+		});
+		generation.end({
+			output: [
+				'data: 0:"Hello! How can I help you today?"',
+				'data: d:{"credits_used":0.0046,"tokens":{"input":60,"output":8,"total":68}}',
+			].join("\n"),
+		});
 
 		const serialized = JSON.stringify([
 			mocks.client.trace.mock.calls,
@@ -90,6 +102,18 @@ describe("langfuse client redaction wrapper", () => {
 		);
 		expect(serialized).not.toContain("Bearer abcdefghijklmnopqrstuvwxyz123456");
 		expect(serialized).not.toContain("hf_abcdefghijklmnopqrstuvwxyz");
+		for (const call of [
+			mocks.span.end.mock.calls.at(-1),
+			mocks.generation.end.mock.calls.at(-1),
+		]) {
+			const output = String(call?.[0]?.output);
+			expect(output).not.toMatch(/^data:/);
+			expect(output).toContain('data\\: 0:"Hello! How can I help you today?"');
+			expect(output).toContain('data: d:{"credits_used":0.0046');
+		}
+		expect(serialized).toContain("data\\\\: 0:");
+		expect(serialized).toContain("data: d:");
+		expect(serialized).toContain("credits_used");
 		expect(serialized).toContain("[REDACTED:langfuse-secret-key:");
 		expect(serialized).toContain("[REDACTED:github-token:");
 		expect(serialized).toContain("[REDACTED:bearer-token:");
