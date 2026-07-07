@@ -88,6 +88,7 @@ You can also configure keys manually via env vars or settings. Configuration pre
 | **Secret Key** | `LANGFUSE_SECRET_KEY` | - | Langfuse project secret key. |
 | **Base URL** | `LANGFUSE_HOST` | `https://cloud.langfuse.com` | API host. Use `http://localhost:3100` for local. |
 | **User ID** | `PI_LANGFUSE_USER_ID` | `$USER` | Associate traces with a specific user. |
+| **Tags** | `PI_LANGFUSE_TAGS` | config/default | Comma-separated trace tags. Environment tags override `pi-langfuse.json` tags for native agent runs. |
 | **Environment** | `PI_LANGFUSE_ENV` | - | Tag traces, e.g. `local`, `staging`, `production`. |
 | **Release** | `PI_LANGFUSE_RELEASE` | - | Tag traces with a version or release ID. |
 | **Local Autostart** | `PI_LANGFUSE_AUTOSTART` | `config dependent` | `0` disables Docker autostart, `1` forces it. |

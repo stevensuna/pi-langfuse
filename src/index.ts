@@ -354,8 +354,8 @@ function usageDetailsFromUsage(usage?: PiUsage) {
 	const details: Record<string, number> = {};
 	if (usage.input) details.input = usage.input;
 	if (usage.output) details.output = usage.output;
-	if (usage.cacheRead) details.input_cached_read = usage.cacheRead;
-	if (usage.cacheWrite) details.input_cached_write = usage.cacheWrite;
+	if (usage.cacheRead) details.cache_read_input_tokens = usage.cacheRead;
+	if (usage.cacheWrite) details.cache_creation_input_tokens = usage.cacheWrite;
 	if (usage.totalTokens) details.total = usage.totalTokens;
 	return Object.keys(details).length > 0 ? details : undefined;
 }
@@ -376,6 +376,9 @@ function standardUsageFromUsage(usage?: PiUsage) {
 function costDetailsFromUsage(usage?: PiUsage) {
 	const cost = usage?.cost;
 	if (!cost) return undefined;
+	if (![cost.input, cost.output, cost.total].some((value) => typeof value === "number" && value !== 0)) {
+		return undefined;
+	}
 	const details: Record<string, number> = {};
 	if (typeof cost.input === "number") details.input = cost.input;
 	if (typeof cost.output === "number") details.output = cost.output;
@@ -523,6 +526,7 @@ async function finalizePrompt(config: Config | undefined, flush = false) {
 				: truncate(promptState.systemPrompt, 2000),
 			model: currentModel,
 			provider: currentProvider,
+			repository: process.env.LANGFUSE_AGENT_REPOSITORY || undefined,
 			sessionReason: currentSessionReason,
 			runtime: getRuntimeName(),
 			sessionRoot: getSessionRoot(),
@@ -734,6 +738,7 @@ export default async function (pi: ExtensionAPI) {
 					),
 					model: currentModel,
 					provider: currentProvider,
+					repository: process.env.LANGFUSE_AGENT_REPOSITORY || undefined,
 					sessionReason: currentSessionReason,
 					runtime: getRuntimeName(),
 					sessionRoot: getSessionRoot(),

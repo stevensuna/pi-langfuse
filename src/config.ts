@@ -168,8 +168,8 @@ export function resolveConfig(settings: Partial<SettingsValues>): Config {
 			),
 		defaultTags: parseTags(
 			settings["default-tags"] ||
-				fileConfig.defaultTags ||
 				process.env.PI_LANGFUSE_TAGS ||
+				fileConfig.defaultTags ||
 				"",
 		),
 		release:

@@ -61,7 +61,7 @@ These settings control how the Langfuse extension connects to your Langfuse proj
 
 - Settings entered here are stored in plain text by pi-extension-settings.
 - If you prefer not to store keys here, keep using pi-langfuse.json or environment variables.
-- Resolution order is: settings panel -> pi-langfuse.json -> environment variables -> defaults.
+- Resolution order is: settings panel -> pi-langfuse.json -> environment variables -> defaults. PI_LANGFUSE_TAGS is process-scoped and overrides pi-langfuse.json tags for native agent runs.
 - When a setting is empty, this panel shows the live fallback value currently resolved from pi-langfuse.json, environment variables, or built-in defaults.
 - Tag lists are comma-separated.
 - Character limits are bounded to sensible minimums/maximums during config resolution.

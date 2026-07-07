@@ -24,6 +24,7 @@ describe("resolveConfig", () => {
 		delete process.env.PI_LANGFUSE_UNREDACTED;
 		delete process.env.PI_LANGFUSE_REDACTION_SECRETS;
 		delete process.env.PI_LANGFUSE_RAW_PROVIDER_REQUEST;
+		delete process.env.PI_LANGFUSE_TAGS;
 		delete process.env.PI_CODING_AGENT_DIR;
 	});
 	it("should use default settings when no input is provided", () => {
@@ -46,6 +47,21 @@ describe("resolveConfig", () => {
 			"default-tags": "tag1, tag2, tag3",
 		});
 		expect(config.defaultTags).toEqual(["tag1", "tag2", "tag3"]);
+	});
+
+	it("lets env tags override file tags for native agent runs", () => {
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({ defaultTags: ["pi"] }),
+		);
+		process.env.PI_LANGFUSE_TAGS = "pi,sge,realtime,repo:owner/name";
+
+		expect(resolveConfig({}).defaultTags).toEqual([
+			"pi",
+			"sge",
+			"realtime",
+			"repo:owner/name",
+		]);
 	});
 
 	it("should clamp numeric values", () => {
