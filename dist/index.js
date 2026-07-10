@@ -275,6 +275,22 @@ function getUserId(config) {
 function getRuntimeName() {
     return process.env.TIA_ACTIVE === "1" ? "tia" : "pi";
 }
+function repositoryForTrace(cwd) {
+    return (process.env.AI_SDLC_REPOSITORY ||
+        process.env.LANGFUSE_AGENT_REPOSITORY ||
+        basename(cwd || process.cwd()));
+}
+function workflowMetadata(cwd) {
+    return {
+        schemaVersion: 1,
+        repository: repositoryForTrace(cwd),
+        gitBranch: process.env.AI_SDLC_GIT_BRANCH || process.env.GIT_BRANCH,
+        cwd,
+        workflowVersion: process.env.AI_SDLC_WORKFLOW_VERSION || "0.1.0",
+        agent: "pi",
+        runtimeVersion: process.env.PI_VERSION,
+    };
+}
 function getSessionRoot(sessionFile = currentSessionFile) {
     const marker = "/sessions/";
     const index = sessionFile.indexOf(marker);
@@ -310,22 +326,17 @@ function writeRawTrace(config, record) {
     });
 }
 function buildTraceTags(config, cwd) {
-    const runtime = getRuntimeName();
     const tags = [
-        "pi",
-        "pi-langfuse",
-        `runtime:${runtime}`,
+        "workflow:ai-sdlc",
+        "agent:pi",
+        `repo:${repositoryForTrace(cwd)}`,
+        `env:${config?.environment || "development"}`,
         ...(config?.defaultTags ?? []),
     ];
-    const projectName = basename(cwd || process.cwd());
-    if (projectName)
-        tags.push(`project:${projectName}`);
     if (currentProvider)
         tags.push(`provider:${currentProvider}`);
     if (currentModel)
         tags.push(`model:${currentModel}`);
-    if (currentSessionReason)
-        tags.push(`session:${currentSessionReason}`);
     return Array.from(new Set(tags)).slice(0, 20);
 }
 async function finalizePrompt(config, flush = false) {
@@ -569,19 +580,17 @@ export default async function (pi) {
                 release: config.release || undefined,
                 environment: config.environment || undefined,
                 metadata: {
+                    ...workflowMetadata(cwd),
                     redaction: redactionMetadata(config),
                     cwd,
                     systemPrompt: telemetryText(config, event.systemPrompt || "", config.traceInputMaxChars),
                     model: currentModel,
                     provider: currentProvider,
-                    repository: process.env.LANGFUSE_AGENT_REPOSITORY || undefined,
                     sessionReason: currentSessionReason,
                     runtime: getRuntimeName(),
                     sessionRoot: getSessionRoot(),
                     sessionFile: currentSessionFile || undefined,
                     previousSessionFile: currentPreviousSessionFile || undefined,
-                    tiaActive: process.env.TIA_ACTIVE === "1",
-                    tiaCommand: process.env.TIA_COMMAND || undefined,
                 },
             });
             promptState.trace = trace;

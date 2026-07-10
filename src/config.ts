@@ -223,9 +223,9 @@ export function resolveConfig(settings: Partial<SettingsValues>): Config {
 		skipUnpersistedSessions:
 			(fileConfig.skipUnpersistedSessions as boolean | undefined) ??
 			process.env.PI_LANGFUSE_SKIP_UNPERSISTED !== "0",
-		captureProviderPayload:
-			(fileConfig.captureProviderPayload as boolean | undefined) ??
-			process.env.PI_LANGFUSE_CAPTURE_PROVIDER_PAYLOAD === "1",
+		// AI SDLC retains bounded prompt, generation, and tool context in Langfuse.
+		// Never persist provider request payloads, even when legacy config enables it.
+		captureProviderPayload: false,
 		providerPayloadMaxChars: clampNumber(
 			fileConfig.providerPayloadMaxChars ??
 				process.env.PI_LANGFUSE_PROVIDER_PAYLOAD_MAX_CHARS,
@@ -239,21 +239,15 @@ export function resolveConfig(settings: Partial<SettingsValues>): Config {
 				process.env.PI_LANGFUSE_REDACTION_SECRETS,
 			100,
 		),
-		rawTraceEnabled:
-			settings["raw-trace-enabled"] ??
-			(fileConfig.rawTraceEnabled as boolean | undefined) ??
-			parseBooleanEnv(process.env.PI_LANGFUSE_RAW_TRACE) ??
-			false,
+		// Raw local trace files are intentionally disabled for AI SDLC sessions.
+		rawTraceEnabled: false,
 		rawTraceDir: String(
 			settings["raw-trace-dir"] ||
 				fileConfig.rawTraceDir ||
 				process.env.PI_LANGFUSE_RAW_TRACE_DIR ||
 				defaultRawTraceDir(),
 		),
-		rawTraceProviderRequestMode:
-			parseProviderRequestMode(process.env.PI_LANGFUSE_RAW_PROVIDER_REQUEST) ??
-			parseProviderRequestMode(fileConfig.rawTraceProviderRequestMode) ??
-			"summary",
+		rawTraceProviderRequestMode: "off",
 		localAutostart,
 		localAutostartDir: String(
 			fileConfig.localAutostartDir ??

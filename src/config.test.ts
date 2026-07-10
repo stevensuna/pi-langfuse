@@ -100,13 +100,13 @@ describe("resolveConfig", () => {
 		]);
 	});
 
-	it("allows settings to enable raw traces", () => {
+	it("keeps raw traces disabled when legacy settings request them", () => {
 		const config = resolveConfig({
 			"raw-trace-enabled": true,
 			"raw-trace-dir": "/tmp/pi-langfuse-raw",
 		});
 
-		expect(config.rawTraceEnabled).toBe(true);
+		expect(config.rawTraceEnabled).toBe(false);
 		expect(config.rawTraceDir).toBe("/tmp/pi-langfuse-raw");
 	});
 
@@ -118,13 +118,13 @@ describe("resolveConfig", () => {
 		);
 	});
 
-	it("lets env opt into full raw provider requests for one process", () => {
+	it("keeps raw provider requests disabled when legacy environment requests them", () => {
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockReturnValue(
 			JSON.stringify({ rawTraceProviderRequestMode: "summary" }),
 		);
 		process.env.PI_LANGFUSE_RAW_PROVIDER_REQUEST = "full";
 
-		expect(resolveConfig({}).rawTraceProviderRequestMode).toBe("full");
+		expect(resolveConfig({}).rawTraceProviderRequestMode).toBe("off");
 	});
 });
