@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { reportDiagnostic } from "./diagnostics.js";
 import { type RedactionConfig, sanitizeForTelemetry } from "./redaction.js";
 
 interface RawTraceConfig extends RedactionConfig {
@@ -52,8 +53,11 @@ function flushQueue() {
 				`${JSON.stringify(sanitizedRecord, jsonReplacer)}\n`,
 				"utf-8",
 			);
-		} catch (error) {
-			console.warn("📊 Langfuse: Failed to write raw trace", error);
+		} catch {
+			reportDiagnostic({
+				code: "raw-trace-write-failed",
+				message: "Unable to write the local Langfuse raw trace",
+			});
 		}
 	}
 }

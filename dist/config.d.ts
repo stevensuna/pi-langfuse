@@ -27,6 +27,7 @@ export interface Config {
     localAutostartDir: string;
     localAutostartHealthUrl: string;
     localAutostartTimeoutMs: number;
+    modelsDevPath?: string;
 }
 export declare function resolveConfig(settings: Partial<SettingsValues>): Config;
 export declare function canTrace(config: Config): boolean;

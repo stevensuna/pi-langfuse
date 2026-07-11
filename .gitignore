@@ -7,3 +7,10 @@ config.json
 dist/
 .npmrc
 .pi/
+
+# The extension loads committed dist/ output directly. Keep its runtime modules
+# visible to Git while all other generated files stay ignored.
+!dist/
+dist/*
+!dist/diagnostics.*
+!dist/model-pricing.*

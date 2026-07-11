@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { reportDiagnostic } from "./diagnostics.js";
 let attempted = false;
 let warned = false;
 async function isHealthy(url, timeoutMs) {
@@ -20,7 +21,7 @@ function warnOnce(message) {
     if (warned)
         return;
     warned = true;
-    console.warn(`📊 Langfuse: ${message}`);
+    reportDiagnostic({ code: "local-autostart-failed", message });
 }
 export async function ensureLocalLangfuseStarted(config) {
     if (!config.localAutostart)

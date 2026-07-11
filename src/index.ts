@@ -6,6 +6,7 @@ import {
 	getConfigWarnings,
 	resolveConfig,
 } from "./config.js";
+import { reportDiagnostic, setDiagnosticReporter } from "./diagnostics.js";
 import { exportRedactedData } from "./export.js";
 import {
 	flushClient,
@@ -17,6 +18,7 @@ import {
 } from "./langfuse-client.js";
 import { ensureLocalLangfuseStarted } from "./local-autostart.js";
 import { runLangfuseInit } from "./local-init.js";
+import { estimateCostFromModelsDev } from "./model-pricing.js";
 import { appendRawTrace, drainRawTraceQueue } from "./raw-trace.js";
 import { redactionMetadata, redactString } from "./redaction.js";
 import {
@@ -96,6 +98,7 @@ const LANGFUSE_STATUS_KEY = "pi-langfuse:status";
 
 interface LangfuseUiContext {
 	ui?: {
+		notify?: (message: string, type?: "info" | "warning" | "error") => void;
 		setStatus?: (key: string, text: string | undefined) => void;
 	};
 	sessionManager?: { getSessionFile?: () => string | undefined };
@@ -130,12 +133,14 @@ function announceConfigState(settings: Partial<SettingsValues>) {
 	const config = resolveConfig(settings);
 	if (!config.enabled) return;
 	if (!config.publicKey || !config.secretKey) {
-		console.log(
-			"📊 Langfuse: Configure public/secret key in settings, pi-langfuse.json, or LANGFUSE_* env vars to enable",
-		);
+		reportDiagnostic({
+			code: "missing-credentials",
+			message: "Configure Langfuse public and secret keys to enable tracing",
+			level: "info",
+		});
 	}
 	for (const warning of getConfigWarnings(config)) {
-		console.warn(`📊 Langfuse: ${warning}`);
+		reportDiagnostic({ code: `config-warning:${warning}`, message: warning });
 	}
 }
 
@@ -373,21 +378,34 @@ function standardUsageFromUsage(usage?: PiUsage) {
 	return Object.keys(standard).length > 0 ? standard : undefined;
 }
 
-function costDetailsFromUsage(usage?: PiUsage) {
+function costDetailsFromUsage(
+	usage: PiUsage | undefined,
+	config: Config,
+	model?: string,
+	provider?: string,
+) {
 	const cost = usage?.cost;
-	if (!cost) return undefined;
 	if (
-		![cost.input, cost.output, cost.total].some(
+		cost &&
+		[cost.input, cost.output, cost.total].some(
 			(value) => typeof value === "number" && value !== 0,
 		)
 	) {
-		return undefined;
+		const details: Record<string, number> = {};
+		if (typeof cost.input === "number") details.input = cost.input;
+		if (typeof cost.output === "number") details.output = cost.output;
+		if (typeof cost.total === "number") details.total = cost.total;
+		return { details, source: "provider" as const };
 	}
-	const details: Record<string, number> = {};
-	if (typeof cost.input === "number") details.input = cost.input;
-	if (typeof cost.output === "number") details.output = cost.output;
-	if (typeof cost.total === "number") details.total = cost.total;
-	return Object.keys(details).length > 0 ? details : undefined;
+	return estimateCostFromModelsDev({
+		catalogPath: config.modelsDevPath ?? "",
+		model,
+		provider,
+		input: usage?.input,
+		output: usage?.output,
+		cacheRead: usage?.cacheRead,
+		cacheWrite: usage?.cacheWrite,
+	});
 }
 
 function getUserId(config?: Config) {
@@ -410,7 +428,10 @@ function workflowMetadata(cwd: string) {
 	return {
 		schemaVersion: 1,
 		repository: repositoryForTrace(cwd),
-		gitBranch: process.env.AI_SDLC_GIT_BRANCH || process.env.GIT_BRANCH,
+		gitBranch:
+			process.env.AI_SDLC_GIT_BRANCH ||
+			process.env.LANGFUSE_GIT_BRANCH ||
+			process.env.GIT_BRANCH,
 		cwd,
 		workflowVersion: process.env.AI_SDLC_WORKFLOW_VERSION || "0.1.0",
 		agent: "pi",
@@ -536,6 +557,7 @@ async function finalizePrompt(config: Config | undefined, flush = false) {
 		release: config?.release || undefined,
 		environment: config?.environment || undefined,
 		metadata: {
+			...workflowMetadata(promptState.cwd),
 			redaction: config ? redactionMetadata(config) : undefined,
 			cwd: promptState.cwd,
 			systemPrompt: config
@@ -577,6 +599,12 @@ async function finalizePrompt(config: Config | undefined, flush = false) {
 export default async function (pi: ExtensionAPI) {
 	let settings = getStoredSettingsValues(pi);
 	let lastUiContext: LangfuseUiContext | undefined;
+	const bindUiDiagnostics = (ctx: LangfuseUiContext, reset = false) => {
+		lastUiContext = ctx;
+		setDiagnosticReporter((diagnostic) => {
+			ctx.ui?.notify?.(`Langfuse: ${diagnostic.message}`, diagnostic.level);
+		}, reset);
+	};
 
 	const refreshConfig = async () => {
 		settings = getStoredSettingsValues(pi);
@@ -644,7 +672,8 @@ export default async function (pi: ExtensionAPI) {
 	announceConfigState(settings);
 
 	pi.on("session_start", async (event, ctx) => {
-		lastUiContext = ctx;
+		bindUiDiagnostics(ctx, true);
+		announceConfigState(settings);
 		updateLangfuseStatusLine(ctx, resolveConfig(settings));
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		currentSessionFile = sessionFile || "";
@@ -681,6 +710,7 @@ export default async function (pi: ExtensionAPI) {
 			const config = resolveConfig(settings);
 			promptState.trace?.update({
 				metadata: {
+					...workflowMetadata(promptState.cwd),
 					model: currentModel,
 					provider: currentProvider,
 				},
@@ -690,7 +720,7 @@ export default async function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		lastUiContext = ctx;
+		bindUiDiagnostics(ctx);
 		const config = resolveConfig(settings);
 		updateLangfuseStatusLine(ctx, config);
 		const sessionFile = ctx.sessionManager.getSessionFile();
@@ -769,8 +799,11 @@ export default async function (pi: ExtensionAPI) {
 			});
 
 			promptState.trace = trace;
-		} catch (e) {
-			console.warn("📊 Langfuse: Failed to create trace", e);
+		} catch {
+			reportDiagnostic({
+				code: "trace-create-failed",
+				message: "Unable to create Langfuse trace",
+			});
 		}
 	});
 
@@ -796,8 +829,11 @@ export default async function (pi: ExtensionAPI) {
 					sessionReason: currentSessionReason,
 				},
 			});
-		} catch (e) {
-			console.warn("📊 Langfuse: Failed to create prompt span", e);
+		} catch {
+			reportDiagnostic({
+				code: "prompt-span-create-failed",
+				message: "Unable to create Langfuse prompt span",
+			});
 		}
 	});
 
@@ -825,8 +861,11 @@ export default async function (pi: ExtensionAPI) {
 					provider: currentProvider,
 				},
 			});
-		} catch (e) {
-			console.warn("📊 Langfuse: Failed to create turn span", e);
+		} catch {
+			reportDiagnostic({
+				code: "turn-span-create-failed",
+				message: "Unable to create Langfuse turn span",
+			});
 		}
 	});
 
@@ -918,8 +957,11 @@ export default async function (pi: ExtensionAPI) {
 					turnIndex: activeTurn?.index,
 				},
 			});
-		} catch (e) {
-			console.warn("📊 Langfuse: Failed to create tool span", e);
+		} catch {
+			reportDiagnostic({
+				code: "tool-span-create-failed",
+				message: "Unable to create Langfuse tool span",
+			});
 		}
 	});
 
@@ -1040,8 +1082,11 @@ export default async function (pi: ExtensionAPI) {
 					provider: currentProvider,
 				},
 			});
-		} catch (e) {
-			console.warn("📊 Langfuse: Failed to start generation", e);
+		} catch {
+			reportDiagnostic({
+				code: "generation-start-failed",
+				message: "Unable to start Langfuse generation",
+			});
 		}
 	});
 
@@ -1113,7 +1158,12 @@ export default async function (pi: ExtensionAPI) {
 		const usage = message.usage;
 		const standardUsage = standardUsageFromUsage(usage);
 		const usageDetails = usageDetailsFromUsage(usage);
-		const costDetails = costDetailsFromUsage(usage);
+		const cost = costDetailsFromUsage(
+			usage,
+			config,
+			message.model || currentModel,
+			currentProvider,
+		);
 
 		promptState.lastAssistantText = telemetryText(
 			config,
@@ -1148,43 +1198,24 @@ export default async function (pi: ExtensionAPI) {
 					undefined,
 				usage: standardUsage,
 				usageDetails,
-				costDetails,
+				costDetails: cost?.details,
 				model: message.model || currentModel || undefined,
 				metadata: {
 					model: message.model || currentModel,
 					provider: currentProvider,
+					costSource: cost?.source ?? "unavailable",
+					costKind: cost ? undefined : "unavailable",
+					priceRetrievedAt:
+						cost && "retrievedAt" in cost ? cost.retrievedAt : undefined,
 					turnIndex: turnState.index,
 					thinking: turnState.streamingThinking || undefined,
 				},
 			});
-
-			const lf = await getClient(config);
-			if (usage?.input) {
-				lf.score({
-					name: "input_tokens",
-					value: usage.input,
-					traceId: promptState.trace.id,
-					observationId: turnState.generation.id,
-				});
-			}
-			if (usage?.output) {
-				lf.score({
-					name: "output_tokens",
-					value: usage.output,
-					traceId: promptState.trace.id,
-					observationId: turnState.generation.id,
-				});
-			}
-			if (typeof usage?.cost?.total === "number") {
-				lf.score({
-					name: "total_cost",
-					value: usage.cost.total,
-					traceId: promptState.trace.id,
-					observationId: turnState.generation.id,
-				});
-			}
-		} catch (e) {
-			console.warn("📊 Langfuse: Failed to end generation", e);
+		} catch {
+			reportDiagnostic({
+				code: "generation-end-failed",
+				message: "Unable to finalize Langfuse generation",
+			});
 		}
 	});
 
@@ -1203,7 +1234,12 @@ export default async function (pi: ExtensionAPI) {
 		const usage = message.usage;
 		const standardUsage = standardUsageFromUsage(usage);
 		const usageDetails = usageDetailsFromUsage(usage);
-		const costDetails = costDetailsFromUsage(usage);
+		const cost = costDetailsFromUsage(
+			usage,
+			config,
+			currentModel,
+			currentProvider,
+		);
 
 		if (canTrace(config)) {
 			turnState?.span?.end({
@@ -1212,7 +1248,7 @@ export default async function (pi: ExtensionAPI) {
 					: undefined,
 				usage: standardUsage,
 				usageDetails,
-				costDetails,
+				costDetails: cost?.details,
 				metadata: {
 					turnIndex: event.turnIndex,
 					durationMs: turnState ? Date.now() - turnState.startedAt : undefined,

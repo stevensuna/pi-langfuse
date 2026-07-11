@@ -25,6 +25,8 @@ describe("resolveConfig", () => {
 		delete process.env.PI_LANGFUSE_REDACTION_SECRETS;
 		delete process.env.PI_LANGFUSE_RAW_PROVIDER_REQUEST;
 		delete process.env.PI_LANGFUSE_TAGS;
+		delete process.env.PI_LANGFUSE_MODELS_DEV_PATH;
+		delete process.env.LANGFUSE_MODELS_DEV_PATH;
 		delete process.env.PI_CODING_AGENT_DIR;
 	});
 	it("should use default settings when no input is provided", () => {
@@ -126,5 +128,15 @@ describe("resolveConfig", () => {
 		process.env.PI_LANGFUSE_RAW_PROVIDER_REQUEST = "full";
 
 		expect(resolveConfig({}).rawTraceProviderRequestMode).toBe("off");
+	});
+
+	it("uses the runtime models.dev path when a legacy config stores an empty value", () => {
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({ modelsDevPath: "" }),
+		);
+		process.env.PI_LANGFUSE_MODELS_DEV_PATH = "/tmp/models.dev.json";
+
+		expect(resolveConfig({}).modelsDevPath).toBe("/tmp/models.dev.json");
 	});
 });

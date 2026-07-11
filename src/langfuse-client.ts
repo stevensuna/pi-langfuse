@@ -1,241 +1,306 @@
-import { Langfuse } from "langfuse";
+import { LangfuseSpanProcessor } from "@langfuse/otel";
+import {
+	LangfuseOtelSpanAttributes,
+	propagateAttributes,
+	setLangfuseTracerProvider,
+	startObservation,
+} from "@langfuse/tracing";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { Config } from "./config.js";
 import { sanitizeForTelemetry } from "./redaction.js";
 
-type LangfuseMetadata = Record<string, unknown>;
-
-type TraceUpdateBody = {
-	id?: string | null;
-	name?: string;
-	metadata?: LangfuseMetadata;
-	output?: unknown;
+type Metadata = Record<string, unknown>;
+type Body = {
+	metadata?: Metadata;
 	input?: unknown;
-	sessionId?: string;
-	userId?: string;
-	tags?: string[];
-	release?: string;
-	version?: string;
-	environment?: string;
-	public?: boolean;
-};
-
-type ObservationEndBody = {
-	metadata?: LangfuseMetadata;
-	isError?: boolean;
 	output?: unknown;
 	usage?: unknown;
 	usageDetails?: Record<string, number>;
 	costDetails?: Record<string, number>;
 	model?: string;
 	statusMessage?: string;
+	isError?: boolean;
 };
+type NativeObservation = {
+	id: string;
+	traceId: string;
+	end(): void;
+	updateOtelSpanAttributes(attributes: Record<string, unknown>): void;
+	startObservation(
+		name: string,
+		attributes: Record<string, unknown>,
+		options?: { asType?: "span" | "generation" },
+	): NativeObservation;
+};
+type TraceAttributes = {
+	traceName: string;
+	userId?: string;
+	sessionId?: string;
+	tags?: string[];
+	metadata?: Metadata;
+	version?: string;
+	release?: string;
+};
+type TraceUpdate = Body & Partial<TraceAttributes> & { environment?: string };
 
 export interface LangfuseTrace {
 	id: string;
-	update(body?: TraceUpdateBody): void;
+	update(body?: TraceUpdate): void;
 }
-
 export interface LangfuseSpan {
 	id: string;
-	update?(body: {
-		metadata?: LangfuseMetadata;
-		input?: unknown;
-		output?: unknown;
-		statusMessage?: string;
-	}): void;
-	end(body?: ObservationEndBody): void;
+	update?(body: Body): void;
+	end(body?: Body): void;
+}
+export interface LangfuseGeneration extends LangfuseSpan {}
+
+type TraceState = { root: NativeObservation; attributes: TraceAttributes };
+let provider: NodeTracerProvider | null = null;
+let processor: LangfuseSpanProcessor | null = null;
+let configKey = "";
+const traces = new Map<string, TraceState>();
+const observations = new Map<string, NativeObservation>();
+
+function sanitize<T>(config: Config, value: T): T {
+	return sanitizeForTelemetry(config, value);
 }
 
-export interface LangfuseGeneration {
-	id: string;
-	update?(body: {
-		metadata?: LangfuseMetadata;
-		usage?: unknown;
-		usageDetails?: Record<string, number>;
-		output?: unknown;
-		costDetails?: Record<string, number>;
-		model?: string;
-		statusMessage?: string;
-	}): void;
-	end(body?: ObservationEndBody): void;
-}
-
-interface LangfuseClient {
-	trace(body?: {
-		id?: string | null;
-		name: string;
-		metadata?: LangfuseMetadata;
-		input?: unknown;
-		output?: unknown;
-		sessionId?: string;
-		userId?: string;
-		tags?: string[];
-		release?: string;
-		version?: string;
-		environment?: string;
-		public?: boolean;
-	}): LangfuseTrace;
-	span(body: {
-		name: string;
-		traceId: string;
-		parentObservationId?: string;
-		metadata?: LangfuseMetadata;
-		input?: unknown;
-		output?: unknown;
-	}): LangfuseSpan;
-	generation(body: {
-		name: string;
-		traceId: string;
-		parentObservationId?: string;
-		metadata?: LangfuseMetadata;
-		input?: unknown;
-		output?: unknown;
-		usage?: unknown;
-		usageDetails?: Record<string, number>;
-		model?: string;
-		costDetails?: Record<string, number>;
-		version?: string;
-	}): LangfuseGeneration;
-	score(body: {
-		name: string;
-		value: number;
-		traceId?: string;
-		observationId?: string;
-		sessionId?: string;
-		comment?: string;
-	}): void;
-	flushAsync?(): Promise<void>;
-	shutdownAsync(): Promise<void>;
-}
-
-let client: LangfuseClient | null = null;
-let clientConfigKey = "";
-
-function isBase64DataUri(value: string): boolean {
-	return /^data:[^,;]+(?:;[^,;]+)*;base64,[A-Za-z0-9+/=_-]+$/i.test(value);
-}
-
-function neutralizeLangfuseMediaPrefix<T>(
-	value: T,
-	seen = new WeakSet<object>(),
-): T {
-	if (typeof value === "string") {
-		return (
-			value.startsWith("data:") && !isBase64DataUri(value)
-				? `data\\:${value.slice("data:".length)}`
-				: value
-		) as T;
-	}
-	if (!value || typeof value !== "object") return value;
-	if (seen.has(value)) return "[Circular]" as T;
-	seen.add(value);
-
-	if (Array.isArray(value)) {
-		return value.map((item) => neutralizeLangfuseMediaPrefix(item, seen)) as T;
-	}
-
-	const output: Record<string, unknown> = {};
-	for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-		output[key] = neutralizeLangfuseMediaPrefix(item, seen);
-	}
-	return output as T;
-}
-
-function sanitizeBody<T>(config: Config, body: T): T {
-	return neutralizeLangfuseMediaPrefix(sanitizeForTelemetry(config, body));
-}
-
-function wrapTrace(config: Config, trace: LangfuseTrace): LangfuseTrace {
+function traceTelemetryAttributes(
+	attributes?: TraceAttributes,
+): Record<string, unknown> {
+	if (!attributes) return {};
 	return {
-		id: trace.id,
-		update(body) {
-			trace.update(sanitizeBody(config, body));
-		},
+		[LangfuseOtelSpanAttributes.TRACE_NAME]: attributes.traceName,
+		[LangfuseOtelSpanAttributes.TRACE_USER_ID]: attributes.userId,
+		[LangfuseOtelSpanAttributes.TRACE_SESSION_ID]: attributes.sessionId,
+		[LangfuseOtelSpanAttributes.TRACE_TAGS]: attributes.tags,
+		[LangfuseOtelSpanAttributes.TRACE_METADATA]: attributes.metadata
+			? JSON.stringify(attributes.metadata)
+			: undefined,
+		[LangfuseOtelSpanAttributes.RELEASE]: attributes.release,
+		[LangfuseOtelSpanAttributes.VERSION]: attributes.version,
 	};
 }
 
-function wrapSpan(config: Config, span: LangfuseSpan): LangfuseSpan {
-	return {
-		id: span.id,
-		update(body) {
-			span.update?.(sanitizeBody(config, body));
-		},
-		end(body) {
-			span.end(sanitizeBody(config, body));
-		},
-	};
-}
-
-function wrapGeneration(
+function observationAttributes(
 	config: Config,
-	generation: LangfuseGeneration,
-): LangfuseGeneration {
+	body?: Body,
+	traceAttributes?: TraceAttributes,
+): Record<string, unknown> {
+	const safe = sanitize(config, body ?? {});
 	return {
-		id: generation.id,
+		...traceTelemetryAttributes(traceAttributes),
+		input: safe.input,
+		output: safe.output,
+		metadata: safe.metadata,
+		model: safe.model,
+		usage: safe.usage,
+		usageDetails: safe.usageDetails,
+		costDetails: safe.costDetails,
+		statusMessage: safe.statusMessage,
+		level: safe.isError ? "ERROR" : undefined,
+	};
+}
+
+function propagatedAttributes(attributes: TraceAttributes) {
+	return {
+		...attributes,
+		metadata: attributes.metadata
+			? Object.fromEntries(
+					Object.entries(attributes.metadata).flatMap(([key, value]) => {
+						if (value === undefined || value === null) return [];
+						const text =
+							typeof value === "string" ? value : JSON.stringify(value);
+						if (text === undefined) return [];
+						return [[key, text.slice(0, 200)]];
+					}),
+				)
+			: undefined,
+	};
+}
+
+function update(
+	observation: NativeObservation,
+	config: Config,
+	body?: Body,
+	traceAttributes?: TraceAttributes,
+) {
+	if (!body) return;
+	observation.updateOtelSpanAttributes(
+		observationAttributes(config, body, traceAttributes),
+	);
+}
+
+function wrapObservation(
+	observation: NativeObservation,
+	config: Config,
+	traceAttributes: TraceAttributes,
+): LangfuseSpan {
+	observations.set(observation.id, observation);
+	return {
+		id: observation.id,
 		update(body) {
-			generation.update?.(sanitizeBody(config, body));
+			update(observation, config, body, traceAttributes);
 		},
 		end(body) {
-			generation.end(sanitizeBody(config, body));
+			update(observation, config, body, traceAttributes);
+			observation.end();
 		},
 	};
 }
 
-function wrapClient(config: Config, rawClient: LangfuseClient): LangfuseClient {
-	return {
-		trace(body) {
-			return wrapTrace(config, rawClient.trace(sanitizeBody(config, body)));
-		},
-		span(body) {
-			return wrapSpan(config, rawClient.span(sanitizeBody(config, body)));
-		},
-		generation(body) {
-			return wrapGeneration(
-				config,
-				rawClient.generation(sanitizeBody(config, body)),
-			);
-		},
-		score(body) {
-			rawClient.score(sanitizeBody(config, body));
-		},
-		flushAsync: rawClient.flushAsync?.bind(rawClient),
-		shutdownAsync: rawClient.shutdownAsync.bind(rawClient),
-	};
+async function resetClient() {
+	if (provider) await provider.shutdown();
+	provider = null;
+	processor = null;
+	configKey = "";
+	traces.clear();
+	observations.clear();
+	setLangfuseTracerProvider(null);
+}
+
+function ensureClient(config: Config) {
+	const nextKey = JSON.stringify([
+		config.publicKey,
+		config.secretKey,
+		config.host,
+	]);
+	if (provider && configKey === nextKey) return;
+	if (provider)
+		throw new Error(
+			"Langfuse configuration changed during an active Pi session",
+		);
+	processor = new LangfuseSpanProcessor({
+		publicKey: config.publicKey,
+		secretKey: config.secretKey,
+		baseUrl: config.host,
+		environment: config.environment,
+		release: config.release || undefined,
+		exportMode: "immediate",
+		mask: ({ data }: { data: unknown }) => sanitizeForTelemetry(config, data),
+	});
+	provider = new NodeTracerProvider({ spanProcessors: [processor] });
+	provider.register();
+	setLangfuseTracerProvider(provider);
+	configKey = nextKey;
 }
 
 export async function flushClient() {
-	if (client?.flushAsync) {
-		await client.flushAsync();
-	}
+	await processor?.forceFlush();
 }
 
 export async function shutdownClient() {
-	if (client) {
-		await client.shutdownAsync();
-		client = null;
-		clientConfigKey = "";
-	}
+	await resetClient();
 }
 
-export async function getClient(config: Config): Promise<LangfuseClient> {
-	const nextConfigKey = JSON.stringify({
-		publicKey: config.publicKey,
-		secretKey: config.secretKey,
-		host: config.host,
-	});
-
-	if (client && clientConfigKey !== nextConfigKey) {
-		await shutdownClient();
-	}
-
-	if (!client) {
-		client = new Langfuse({
-			publicKey: config.publicKey,
-			secretKey: config.secretKey,
-			baseUrl: config.host,
-		}) as unknown as LangfuseClient;
-		clientConfigKey = nextConfigKey;
-	}
-
-	return wrapClient(config, client);
+export async function getClient(config: Config) {
+	ensureClient(config);
+	return {
+		trace(body: {
+			id?: string | null;
+			name: string;
+			metadata?: Metadata;
+			input?: unknown;
+			output?: unknown;
+			sessionId?: string;
+			userId?: string;
+			tags?: string[];
+			release?: string;
+			version?: string;
+			environment?: string;
+			public?: boolean;
+		}) {
+			const safe = sanitize(config, body);
+			const attributes: TraceAttributes = {
+				traceName: safe.name,
+				metadata: safe.metadata,
+				sessionId: safe.sessionId,
+				userId: safe.userId,
+				tags: safe.tags,
+				release: safe.release,
+				version: safe.version,
+			};
+			const root = propagateAttributes(propagatedAttributes(attributes), () =>
+				startObservation(
+					safe.name,
+					observationAttributes(config, safe, attributes),
+					{
+						asType: "span",
+					},
+				),
+			) as unknown as NativeObservation;
+			traces.set(root.traceId, { root, attributes });
+			observations.set(root.id, root);
+			return {
+				id: root.traceId,
+				update(updateBody: TraceUpdate) {
+					const state = traces.get(root.traceId);
+					if (!state || !updateBody) return;
+					state.attributes = {
+						...state.attributes,
+						...sanitize(config, updateBody),
+					};
+					update(root, config, updateBody, state.attributes);
+					// The legacy extension finalizes a prompt by updating its trace output.
+					// In OTel the root observation must be ended for the exporter to emit
+					// the complete hierarchy to the v4 events pipeline.
+					if (updateBody.output !== undefined) root.end();
+				},
+			};
+		},
+		span(
+			body: {
+				name: string;
+				traceId: string;
+				parentObservationId?: string;
+			} & Body,
+		) {
+			const state = traces.get(body.traceId);
+			const parent =
+				(body.parentObservationId &&
+					observations.get(body.parentObservationId)) ||
+				state?.root;
+			if (!state || !parent)
+				throw new Error("Langfuse parent observation was not found");
+			const child = propagateAttributes(
+				propagatedAttributes(state.attributes),
+				() =>
+					parent.startObservation(
+						body.name,
+						observationAttributes(config, body, state.attributes),
+						{ asType: "span" },
+					),
+			);
+			return wrapObservation(child, config, state.attributes);
+		},
+		generation(
+			body: {
+				name: string;
+				traceId: string;
+				parentObservationId?: string;
+			} & Body,
+		) {
+			const state = traces.get(body.traceId);
+			const parent =
+				(body.parentObservationId &&
+					observations.get(body.parentObservationId)) ||
+				state?.root;
+			if (!state || !parent)
+				throw new Error("Langfuse parent observation was not found");
+			const child = propagateAttributes(
+				propagatedAttributes(state.attributes),
+				() =>
+					parent.startObservation(
+						body.name,
+						observationAttributes(config, body, state.attributes),
+						{ asType: "generation" },
+					),
+			);
+			return wrapObservation(
+				child,
+				config,
+				state.attributes,
+			) as LangfuseGeneration;
+		},
+	};
 }

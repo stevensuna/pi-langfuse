@@ -2,6 +2,33 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const langfuseMocks = vi.hoisted(() => {
+	const trace = { id: "trace-1", update: vi.fn() };
+	const span = { id: "span-1", update: vi.fn(), end: vi.fn() };
+	const generation = { id: "generation-1", update: vi.fn(), end: vi.fn() };
+	const client = {
+		trace: vi.fn(() => trace),
+		span: vi.fn(() => span),
+		generation: vi.fn(() => generation),
+	};
+	return {
+		client,
+		trace,
+		span,
+		generation,
+		getClient: vi.fn(async () => client),
+		flushClient: vi.fn(async () => undefined),
+		shutdownClient: vi.fn(async () => undefined),
+	};
+});
+
+vi.mock("./langfuse-client.js", () => ({
+	getClient: langfuseMocks.getClient,
+	flushClient: langfuseMocks.flushClient,
+	shutdownClient: langfuseMocks.shutdownClient,
+}));
+
 import registerExtension from "./index.js";
 
 type ExtensionArg = Parameters<typeof registerExtension>[0];
@@ -20,6 +47,12 @@ describe("index (extension entry)", () => {
 
 	beforeEach(() => {
 		vi.resetAllMocks();
+		langfuseMocks.getClient.mockResolvedValue(langfuseMocks.client);
+		langfuseMocks.client.trace.mockImplementation(() => langfuseMocks.trace);
+		langfuseMocks.client.span.mockImplementation(() => langfuseMocks.span);
+		langfuseMocks.client.generation.mockImplementation(
+			() => langfuseMocks.generation,
+		);
 		mockPi.events.emit.mockImplementation(() => undefined);
 		delete process.env.PI_LANGFUSE_RAW_TRACE;
 		delete process.env.PI_LANGFUSE_RAW_TRACE_DIR;
@@ -162,5 +195,142 @@ describe("index (extension entry)", () => {
 		await modelSelectHandler({
 			model: { id: "new-model", provider: "new-provider" },
 		});
+	});
+
+	it("finalizes usage and cost without writing Langfuse text into the terminal", async () => {
+		mockPi.events.emit.mockImplementation((event, probe) => {
+			if (event === "extension:settings:get") {
+				probe.values = {
+					enabled: true,
+					"public-key": "pk-test",
+					"secret-key": "sk-test",
+					"base-url": "http://localhost:3100",
+				};
+			}
+		});
+		await registerExtension(mockPi as unknown as ExtensionArg);
+
+		const handler = (eventName: string) => {
+			const call = mockPi.on.mock.calls.find((entry) => entry[0] === eventName);
+			if (!call) throw new Error(`Missing ${eventName} handler`);
+			return call[1] as EventHandler;
+		};
+		const setStatus = vi.fn();
+		const notify = vi.fn();
+		const ctx = {
+			model: { id: "test-model", provider: "test-provider" },
+			ui: { setStatus, notify },
+			sessionManager: {
+				getSessionFile: () => "/path/to/test-session.jsonl",
+			},
+		};
+		const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+		const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+
+		try {
+			await handler("session_start")({ reason: "test" }, ctx);
+			await handler("before_agent_start")(
+				{
+					prompt: "hello",
+					systemPrompt: "system",
+					systemPromptOptions: { cwd: "/tmp/work" },
+				},
+				ctx,
+			);
+			await handler("agent_start")({});
+			await handler("turn_start")({ turnIndex: 0 });
+			await handler("message_start")({ message: { role: "assistant" } });
+			await handler("message_end")({
+				message: {
+					role: "assistant",
+					model: "test-model",
+					content: [{ type: "text", text: "done" }],
+					usage: {
+						input: 11,
+						output: 7,
+						cost: { input: 0.001, output: 0.002, total: 0.003 },
+					},
+				},
+			});
+
+			expect(langfuseMocks.generation.end).toHaveBeenCalledWith(
+				expect.objectContaining({
+					output: "done",
+					usage: { input: 11, output: 7, total: 18 },
+					usageDetails: { input: 11, output: 7 },
+					costDetails: { input: 0.001, output: 0.002, total: 0.003 },
+				}),
+			);
+			expect(consoleLog).not.toHaveBeenCalled();
+			expect(consoleWarn).not.toHaveBeenCalled();
+			expect(consoleError).not.toHaveBeenCalled();
+		} finally {
+			consoleLog.mockRestore();
+			consoleWarn.mockRestore();
+			consoleError.mockRestore();
+		}
+	});
+
+	it("reports repeated trace failures once through Pi notifications", async () => {
+		mockPi.events.emit.mockImplementation((event, probe) => {
+			if (event === "extension:settings:get") {
+				probe.values = {
+					enabled: true,
+					"public-key": "pk-test",
+					"secret-key": "sk-test",
+					"base-url": "http://localhost:3100",
+				};
+			}
+		});
+		langfuseMocks.getClient.mockRejectedValue(new Error("credential detail"));
+		await registerExtension(mockPi as unknown as ExtensionArg);
+
+		const beforeAgentStartCall = mockPi.on.mock.calls.find(
+			(call) => call[0] === "before_agent_start",
+		);
+		const sessionStartCall = mockPi.on.mock.calls.find(
+			(call) => call[0] === "session_start",
+		);
+		if (!beforeAgentStartCall || !sessionStartCall)
+			throw new Error("Missing tracing handlers");
+		const beforeAgentStart = beforeAgentStartCall[1] as EventHandler;
+		const sessionStart = sessionStartCall[1] as EventHandler;
+		const notify = vi.fn();
+		const ctx = {
+			model: { id: "test-model", provider: "test-provider" },
+			ui: { notify, setStatus: vi.fn() },
+			sessionManager: {
+				getSessionFile: () => "/path/to/test-session.jsonl",
+			},
+		};
+		const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		try {
+			await sessionStart({ reason: "test" }, ctx);
+			await beforeAgentStart(
+				{ prompt: "one", systemPrompt: "system", systemPromptOptions: {} },
+				ctx,
+			);
+			await beforeAgentStart(
+				{ prompt: "two", systemPrompt: "system", systemPromptOptions: {} },
+				ctx,
+			);
+
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify).toHaveBeenCalledWith(
+				"Langfuse: Unable to create Langfuse trace",
+				"warning",
+			);
+			expect(notify).not.toHaveBeenCalledWith(
+				expect.stringContaining("credential detail"),
+				expect.anything(),
+			);
+			expect(consoleWarn).not.toHaveBeenCalled();
+		} finally {
+			consoleWarn.mockRestore();
+		}
 	});
 });

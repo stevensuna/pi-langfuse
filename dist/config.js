@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { reportDiagnostic } from "./diagnostics.js";
 import { defaultRawTraceDir } from "./raw-trace.js";
 import { DEFAULT_SETTINGS } from "./settings.js";
 function readConfigJson(path) {
@@ -9,8 +10,11 @@ function readConfigJson(path) {
         const content = readFileSync(path, "utf-8");
         return JSON.parse(content);
     }
-    catch (e) {
-        console.warn(`📊 Langfuse: Failed to load ${path}`, e);
+    catch {
+        reportDiagnostic({
+            code: "config-load-failed",
+            message: `Unable to load ${path}`,
+        });
         return {};
     }
 }
@@ -61,7 +65,7 @@ function parseBooleanEnv(value) {
         return false;
     return undefined;
 }
-function parseProviderRequestMode(value) {
+function _parseProviderRequestMode(value) {
     if (typeof value !== "string")
         return undefined;
     const normalized = value.trim().toLowerCase();
@@ -160,6 +164,10 @@ export function resolveConfig(settings) {
             `${host.replace(/\/$/, "")}/api/public/health`),
         localAutostartTimeoutMs: clampNumber(fileConfig.localAutostartTimeoutMs ??
             process.env.PI_LANGFUSE_AUTOSTART_TIMEOUT_MS, 200, 50, 5_000),
+        modelsDevPath: String(fileConfig.modelsDevPath ||
+            process.env.PI_LANGFUSE_MODELS_DEV_PATH ||
+            process.env.LANGFUSE_MODELS_DEV_PATH ||
+            ""),
     };
 }
 export function canTrace(config) {

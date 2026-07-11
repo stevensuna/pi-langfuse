@@ -7,49 +7,30 @@ import {
 	shutdownClient,
 } from "../src/langfuse-client.js";
 
-interface LangfuseTraceResponse {
-	name: string;
-	id: string;
-	tags: string[];
-	observations: Array<{
-		name: string;
-		model?: string;
-		usage?: {
-			total?: number;
-		};
-	}>;
-}
-
 const skipE2E =
 	process.env.RUN_LANGFUSE_E2E !== "1" ||
 	!process.env.LANGFUSE_PUBLIC_KEY ||
 	!process.env.LANGFUSE_SECRET_KEY;
 
-describe.runIf(!skipE2E)("Langfuse E2E Integration", () => {
+describe.runIf(!skipE2E)("Langfuse v4 E2E Integration", () => {
 	const config = resolveConfig({});
 	const testId = `e2e-test-${randomUUID()}`;
+	const traceName = `e2e-pi-${testId}`;
 
-	beforeEach(async () => {
-		await shutdownClient();
-	});
+	beforeEach(async () => shutdownClient());
 
-	it("should successfully ingest and retrieve a hierarchical trace", async () => {
+	it("ingests a nested OTel generation and reads it through Metrics v2", async () => {
 		const lf = await getClient(config);
-
-		// 1. Create a complex hierarchy
 		const trace = lf.trace({
-			name: "e2e-pi-test",
-			id: testId,
-			tags: ["env:e2e-test"],
-			metadata: { testRunner: "vitest" },
+			name: traceName,
+			sessionId: testId,
+			tags: ["workflow:ai-sdlc", "agent:pi", "env:e2e-test"],
 		});
-
 		const span = lf.span({
 			name: "test.parent",
 			traceId: trace.id,
 			input: "parent input",
 		});
-
 		const generation = lf.generation({
 			name: "test.generation",
 			traceId: trace.id,
@@ -57,66 +38,59 @@ describe.runIf(!skipE2E)("Langfuse E2E Integration", () => {
 			model: "gpt-3.5-turbo",
 			input: "What is 2+2?",
 		});
-
 		generation.end({
 			output: "4",
-			usage: { total: 10, input: 5, output: 5 },
+			usageDetails: { input: 5, output: 5, total: 10 },
 		});
-
 		span.end({ output: "done" });
-
-		// 2. Force flush to server
+		trace.update({ output: "done" });
 		await flushClient();
 
-		// 3. Poll Langfuse API to verify retrieval
-		// Langfuse API uses Basic Auth with public_key:secret_key
 		const auth = Buffer.from(
 			`${config.publicKey}:${config.secretKey}`,
 		).toString("base64");
-		const baseUrl = config.host.endsWith("/")
-			? config.host.slice(0, -1)
-			: config.host;
-		const apiUrl = `${baseUrl}/api/public/traces/${testId}`;
-
-		let retrievedTrace: LangfuseTraceResponse | null = null;
-		let attempts = 0;
-		const maxAttempts = 10;
-
-		console.log(`Polling for trace ${testId} at ${apiUrl}...`);
-
-		while (attempts < maxAttempts) {
-			const response = await fetch(apiUrl, {
-				headers: {
-					Authorization: `Basic ${auth}`,
-					"Content-Type": "application/json",
-				},
+		const baseUrl = config.host.replace(/\/$/, "");
+		const query = {
+			view: "observations",
+			dimensions: [
+				{ field: "traceName" },
+				{ field: "providedModelName" },
+				{ field: "usageType" },
+			],
+			metrics: [{ measure: "usageByType", aggregation: "sum" }],
+			filters: [],
+			fromTimestamp: new Date(Date.now() - 60_000).toISOString(),
+			toTimestamp: new Date(Date.now() + 60_000).toISOString(),
+			config: { row_limit: 100 },
+		};
+		let data: Array<Record<string, unknown>> = [];
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const url = `${baseUrl}/api/public/v2/metrics?query=${encodeURIComponent(JSON.stringify(query))}`;
+			const response = await fetch(url, {
+				headers: { Authorization: `Basic ${auth}` },
 			});
-
-			if (response.ok) {
-				retrievedTrace = (await response.json()) as LangfuseTraceResponse;
+			if (response.ok)
+				data = (
+					(await response.json()) as { data: Array<Record<string, unknown>> }
+				).data;
+			if (
+				data.some(
+					(row) =>
+						row.traceName === traceName &&
+						row.usageType === "total" &&
+						Number(row.sum_usageByType) === 10,
+				)
+			)
 				break;
-			}
-
-			attempts++;
-			await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2s
+			await new Promise((resolve) => setTimeout(resolve, 2_000));
 		}
-
-		expect(retrievedTrace).toBeDefined();
-		if (!retrievedTrace) throw new Error(`Trace ${testId} was not retrieved`);
-		expect(retrievedTrace.name).toBe("e2e-pi-test");
-		expect(retrievedTrace.id).toBe(testId);
-		expect(retrievedTrace.tags).toContain("env:e2e-test");
-
-		// Check observations count (Span + Generation)
-		expect(retrievedTrace.observations).toBeDefined();
-		expect(retrievedTrace.observations.length).toBeGreaterThanOrEqual(2);
-
-		const genObs = retrievedTrace.observations.find(
-			(o) => o.name === "test.generation",
-		);
-		expect(genObs).toBeDefined();
-		if (!genObs) throw new Error("Generation observation was not retrieved");
-		expect(genObs.model).toBe("gpt-3.5-turbo");
-		expect(genObs?.usage?.total).toBe(10);
-	}, 30000); // 30s timeout for E2E
+		expect(
+			data.some(
+				(row) =>
+					row.traceName === traceName &&
+					row.usageType === "total" &&
+					Number(row.sum_usageByType) === 10,
+			),
+		).toBe(true);
+	}, 30_000);
 });

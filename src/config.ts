@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { reportDiagnostic } from "./diagnostics.js";
 import { defaultRawTraceDir } from "./raw-trace.js";
 import { DEFAULT_SETTINGS, type SettingsValues } from "./settings.js";
 
@@ -32,6 +33,7 @@ export interface Config {
 	localAutostartDir: string;
 	localAutostartHealthUrl: string;
 	localAutostartTimeoutMs: number;
+	modelsDevPath?: string;
 }
 
 function readConfigJson(path: string): Partial<Config> {
@@ -39,8 +41,11 @@ function readConfigJson(path: string): Partial<Config> {
 	try {
 		const content = readFileSync(path, "utf-8");
 		return JSON.parse(content) as Partial<Config>;
-	} catch (e) {
-		console.warn(`📊 Langfuse: Failed to load ${path}`, e);
+	} catch {
+		reportDiagnostic({
+			code: "config-load-failed",
+			message: `Unable to load ${path}`,
+		});
 		return {};
 	}
 }
@@ -102,7 +107,7 @@ function parseBooleanEnv(value: string | undefined) {
 	return undefined;
 }
 
-function parseProviderRequestMode(
+function _parseProviderRequestMode(
 	value: unknown,
 ): RawTraceProviderRequestMode | undefined {
 	if (typeof value !== "string") return undefined;
@@ -265,6 +270,12 @@ export function resolveConfig(settings: Partial<SettingsValues>): Config {
 			200,
 			50,
 			5_000,
+		),
+		modelsDevPath: String(
+			fileConfig.modelsDevPath ||
+				process.env.PI_LANGFUSE_MODELS_DEV_PATH ||
+				process.env.LANGFUSE_MODELS_DEV_PATH ||
+				"",
 		),
 	};
 }
